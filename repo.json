@@ -1,0 +1,8 @@
+{
+  "name": "Anime Provider",
+  "description": "The ultimate CloudStream repository for high-quality Hindi and multi-language dubbed Anime, Movies, and Cartoons.",
+  "manifestVersion": 1,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/senkuboy0-cyber/Anime-Dekho-Test/builds/plugins.json"
+  ]
+}
