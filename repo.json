@@ -1,0 +1,8 @@
+{
+  "name": "AnimeDekho Provider",
+  "description": "imeek - Anime Cart and Streaming",
+ "Version ,
+  "pluginLists": [
+    "https://raw.githubusercontent.com/senkuboy0-cyber/Anime-Dekho-Test/builds/plugins.json"
+  ]
+}
