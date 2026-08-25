@@ -32,5 +32,7 @@ class AnimeDekhoPlugin: BasePlugin() {
         registerExtractorAPI(Blakiteapi())
         registerExtractorAPI(ascdn21())
         registerExtractorAPI(Abyass())
+        registerExtractorAPI(GDFlix())       // gdflix download links
+        registerExtractorAPI(HubCloud())     // hubcloud download links
     }
 }
