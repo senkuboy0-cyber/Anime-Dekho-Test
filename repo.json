@@ -1,7 +1,7 @@
 {
   "name": "AnimeDekho Provider",
-  "description": "imeek - Anime Cart and Streaming",
- "Version ,
+  "description": "AnimeDekho - Hindi Anime, Cartoon and Movies Streaming Extension",
+  "manifestVersion": 1,
   "pluginLists": [
     "https://raw.githubusercontent.com/senkuboy0-cyber/Anime-Dekho-Test/builds/plugins.json"
   ]
