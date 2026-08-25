@@ -222,7 +222,7 @@ open class AnimeDekhoProvider : MainAPI() {
                 type = "series"
             }
 
-            val vars = "{\\\"_wpsearch\\\":\\\"" + nonce + "\\\",\\\"search\\\":\\\"" + searchTerm + "\\\",\\\"type\\\":\\\"" + type + "\\\",\\\"genres\\\":[],\\\"years\\\":[],\\\"sort\\\":1,\\\"page\\\":1}"
+            val vars = "{\\\"_wpsearch\\\":\\\"\" + nonce + \"\\\",\\\"search\\\":\\\"\" + searchTerm + \"\\\",\\\"type\\\":\\\"\" + type + \"\\\",\\\"genres\\\":[],\\\"years\\\":[],\\\"sort\\\":1,\\\"page\\\":1}"
 
             val response = app.post(
                 "$mainUrl/wp-admin/admin-ajax.php",
@@ -244,6 +244,33 @@ open class AnimeDekhoProvider : MainAPI() {
         } catch (e: Exception) {
             null
         }
+    }
+
+    // ─── Resolve Download Buttons (dl1.php / dl2.php wrappers → real host) ───
+    // dl1.php?url=https://animedekho.app/download/dl2.php?url=<base64>  (GDFlix)
+    // dl2.php?url=<base64>                                              (HubCloud)
+    // base64 decodes to https://animedekho.app/?trdekho=N&trid=X&trtype=Y
+    // which 302s again to the real gdflix/hubcloud link.
+    private suspend fun resolveDlTarget(href: String): String? {
+        val wrapped = when {
+            href.contains("dl1.php?url=") -> href.substringAfter("dl1.php?url=")
+            href.contains("dl2.php?url=") -> href
+            else -> return null
+        }
+
+        val b64 = wrapped.substringAfter("dl2.php?url=", "").ifBlank { return null }
+        var current = runCatching { base64Decode(b64) }.getOrNull() ?: return null
+
+        repeat(8) {
+            val res = runCatching {
+                app.get(current, allowRedirects = false, referer = mainUrl)
+            }.getOrNull() ?: return null
+
+            val loc = res.headers["location"] ?: res.headers["Location"]
+            if (loc.isNullOrEmpty()) return current
+            current = if (loc.startsWith("http")) loc else fixUrl(loc, current)
+        }
+        return current
     }
 
     private suspend fun fetchTmdbDetails(document: Document, title: String, isSeries: Boolean, year: Int?): TmdbDetails {
@@ -550,7 +577,7 @@ open class AnimeDekhoProvider : MainAPI() {
             if (filterEl.hasAttr("data-type")) typeVal = filterEl.attr("data-type")
         }
 
-        val vars = "{\\\"_wpsearch\\\":\\\"" + nonce + "\\\",\\\"taxonomy\\\":\\\"" + taxonomy + "\\\",\\\"search\\\":\\\"" + searchVal + "\\\",\\\"term\\\":\\\"" + termVal + "\\\",\\\"type\\\":\\\"" + typeVal + "\\\",\\\"genres\\\":[],\\\"years\\\":[],\\\"sort\\\":1,\\\"page\\\":" + page + "}"
+        val vars = "{\\\"_wpsearch\\\":\\\"\" + nonce + \"\\\",\\\"taxonomy\\\":\\\"\" + taxonomy + \"\\\",\\\"search\\\":\\\"\" + searchVal + \"\\\",\\\"term\\\":\\\"\" + termVal + \"\\\",\\\"type\\\":\\\"\" + typeVal + \"\\\",\\\"genres\\\":[],\\\"years\\\":[],\\\"sort\\\":1,\\\"page\\\":\" + page + "}"
 
         val response = app.post(
             "$mainUrl/wp-admin/admin-ajax.php",
@@ -663,7 +690,7 @@ open class AnimeDekhoProvider : MainAPI() {
             }
         } else {
             if (nonce.isNotEmpty()) {
-                val vars = "{\\\"_wpsearch\\\":\\\"" + nonce + "\\\",\\\"taxonomy\\\":\\\"none\\\",\\\"search\\\":\\\"" + query + "\\\",\\\"season\\\":\\\"none\\\",\\\"type\\\":\\\"mixed\\\",\\\"genres\\\":[],\\\"years\\\":[],\\\"sort\\\":\\\"1\\\",\\\"page\\\":" + page + "}"
+                val vars = "{\\\"_wpsearch\\\":\\\"\" + nonce + \"\\\",\\\"taxonomy\\\":\\\"none\\\",\\\"search\\\":\\\"\" + query + \"\\\",\\\"season\\\":\\\"none\\\",\\\"type\\\":\\\"mixed\\\",\\\"genres\\\":[],\\\"years\\\":[],\\\"sort\\\":\\\"1\\\",\\\"page\\\":" + page + "}"
                 
                 val response = app.post(
                     url = "$mainUrl/wp-admin/admin-ajax.php",
@@ -1008,6 +1035,51 @@ open class AnimeDekhoProvider : MainAPI() {
                 }
             }
         }
+
+        // ─── Download Buttons: GDFlix & HubCloud ───
+        // <div class="buttondl"><a class="button45" href="...">GDFlix (1080p)</a></div>
+        val dlButtons = doc.select("div.buttondl a[href]")
+        var dlFound = false
+        for (btn in dlButtons) {
+            val btnLabel = btn.text().trim()
+            val resolved = runCatching { resolveDlTarget(btn.attr("href")) }.getOrNull() ?: continue
+
+            Log.d("AnimeDekho", "DL button [$btnLabel] → $resolved")
+
+            val lower = resolved.lowercase()
+            when {
+                lower.contains("gdflix") || lower.contains("gdlink") ||
+                lower.contains("hubcloud") || lower.contains("vcloud") -> {
+                    runCatching {
+                        loadExtractor(resolved, mainUrl, subtitleCallback, callback)
+                        dlFound = true
+                    }
+                }
+                lower.contains("pixeldra") -> {
+                    runCatching {
+                        val pdBase = java.net.URI(resolved).let { "${it.scheme}://${it.host}" }
+                        val finalPd = if (resolved.contains("download", ignoreCase = true)) resolved
+                                      else "$pdBase/api/file/${resolved.substringAfterLast("/")}?download"
+                        callback.invoke(
+                            newExtractorLink(
+                                "Pixeldrain",
+                                "Pixeldrain $btnLabel",
+                                finalPd,
+                                ExtractorLinkType.VIDEO
+                            ) {
+                                this.quality = Qualities.Unknown.value
+                            }
+                        )
+                        dlFound = true
+                    }
+                }
+                else -> {
+                    // Unknown host — let CloudStream route it if an extractor matches
+                    runCatching { loadExtractor(resolved, mainUrl, subtitleCallback, callback) }
+                }
+            }
+        }
+
         var bodyClass: String? = null
         try {
             val bodyEl = app.get(media.url).document.selectFirst("body")
@@ -1026,7 +1098,7 @@ open class AnimeDekhoProvider : MainAPI() {
         }
         if (term == null || term.isEmpty()) {
             Log.e("Error:", "No postid/term ID found in body class: $bodyClass")
-            return false
+            return dlFound
         }
         var success = false
         for (i in 0..10) {
@@ -1050,7 +1122,7 @@ open class AnimeDekhoProvider : MainAPI() {
                 }
             }
         }
-        return success
+        return success || dlFound
     }
 
     data class Media(val url: String, val poster: String? = null, val mediaType: Int? = null)
