@@ -222,7 +222,7 @@ open class AnimeDekhoProvider : MainAPI() {
                 type = "series"
             }
 
-            val vars = "{\\\"_wpsearch\\\":\\\"\" + nonce + \"\\\",\\\"search\\\":\\\"\" + searchTerm + \"\\\",\\\"type\\\":\\\"\" + type + \"\\\",\\\"genres\\\":[],\\\"years\\\":[],\\\"sort\\\":1,\\\"page\\\":1}"
+            val vars = "{\"_wpsearch\":\"" + nonce + "\",\"search\":\"" + searchTerm + "\",\"type\":\"" + type + "\",\"genres\":[],\"years\":[],\"sort\":1,\"page\":1}"
 
             val response = app.post(
                 "$mainUrl/wp-admin/admin-ajax.php",
@@ -236,7 +236,7 @@ open class AnimeDekhoProvider : MainAPI() {
             ).text
 
             val json = parseJson<AjaxResponse>(response)
-            val yearMatch = Regex("<span class=\\\"year\\\">(\\d{4})</span>").find(json.html)
+            val yearMatch = Regex("<span class=\"year\">(\\d{4})</span>").find(json.html)
             if (yearMatch != null) {
                 return yearMatch.groupValues.get(1).toIntOrNull()
             }
@@ -266,9 +266,9 @@ open class AnimeDekhoProvider : MainAPI() {
                 app.get(current, allowRedirects = false, referer = mainUrl)
             }.getOrNull() ?: return null
 
-            val loc = res.headers["location"] ?: res.headers["Location"]
+            val loc = res.headers["location"]
             if (loc.isNullOrEmpty()) return current
-            current = if (loc.startsWith("http")) loc else fixUrl(loc, current)
+            current = if (loc.startsWith("http")) loc else java.net.URI(current).resolve(loc).toString()
         }
         return current
     }
@@ -483,7 +483,7 @@ open class AnimeDekhoProvider : MainAPI() {
     }
 
     private fun mainPageJson(taxonomy: String, search: String, term: String, type: String): String {
-        return "{\\\"taxonomy\\\":\\\"$taxonomy\\\",\\\"search\\\":\\\"$search\\\",\\\"term\\\":\\\"$term\\\",\\\"type\\\":\\\"$type\\\"}"
+        return "{\"taxonomy\":\"$taxonomy\",\"search\":\"$search\",\"term\":\"$term\",\"type\":\"$type\"}"
     }
 
     override val mainPage = mainPageOf(
@@ -500,17 +500,17 @@ open class AnimeDekhoProvider : MainAPI() {
         var isSeries = false
         var isMovie = false
         
-        if (request.data.contains("type\\\":\\\"series")) {
+        if (request.data.contains("\"type\":\"series")) {
             isSeries = true
         }
-        if (request.data.contains("type\\\":\\\"movie")) {
+        if (request.data.contains("\"type\":\"movie")) {
             isMovie = true
         }
         
         val isCategory = !isSeries && !isMovie
 
         if (isCategory) {
-            val termMatch = Regex("\\\"term\\\":\\\"([^\\\"]+)\\\"").find(request.data)
+            val termMatch = Regex("\"term\":\"([^\"]+)\"").find(request.data)
             var term = ""
             if (termMatch != null) {
                 term = termMatch.groupValues.get(1)
@@ -558,7 +558,7 @@ open class AnimeDekhoProvider : MainAPI() {
         }
 
         val pageDoc = app.get(pageUrl).document
-        val nonceMatch = Regex("\\\"nonce\\\":\\\"([^\\\"]+)\\\"").find(pageDoc.html())
+        val nonceMatch = Regex("\"nonce\":\"([^\"]+)\"").find(pageDoc.html())
         var nonce = ""
         if (nonceMatch != null) {
             nonce = nonceMatch.groupValues.get(1)
@@ -577,7 +577,7 @@ open class AnimeDekhoProvider : MainAPI() {
             if (filterEl.hasAttr("data-type")) typeVal = filterEl.attr("data-type")
         }
 
-        val vars = "{\\\"_wpsearch\\\":\\\"\" + nonce + \"\\\",\\\"taxonomy\\\":\\\"\" + taxonomy + \"\\\",\\\"search\\\":\\\"\" + searchVal + \"\\\",\\\"term\\\":\\\"\" + termVal + \"\\\",\\\"type\\\":\\\"\" + typeVal + \"\\\",\\\"genres\\\":[],\\\"years\\\":[],\\\"sort\\\":1,\\\"page\\\":\" + page + "}"
+        val vars = "{\"_wpsearch\":\"" + nonce + "\",\"taxonomy\":\"" + taxonomy + "\",\"search\":\"" + searchVal + "\",\"term\":\"" + termVal + "\",\"type\":\"" + typeVal + "\",\"genres\":[],\"years\":[],\"sort\":1,\"page\":" + page + "}"
 
         val response = app.post(
             "$mainUrl/wp-admin/admin-ajax.php",
@@ -690,7 +690,7 @@ open class AnimeDekhoProvider : MainAPI() {
             }
         } else {
             if (nonce.isNotEmpty()) {
-                val vars = "{\\\"_wpsearch\\\":\\\"\" + nonce + \"\\\",\\\"taxonomy\\\":\\\"none\\\",\\\"search\\\":\\\"\" + query + \"\\\",\\\"season\\\":\\\"none\\\",\\\"type\\\":\\\"mixed\\\",\\\"genres\\\":[],\\\"years\\\":[],\\\"sort\\\":\\\"1\\\",\\\"page\\\":" + page + "}"
+                val vars = "{\"_wpsearch\":\"" + nonce + "\",\"taxonomy\":\"none\",\"search\":\"" + query + "\",\"season\":\"none\",\"type\":\"mixed\",\"genres\":[],\"years\":[],\"sort\":\"1\",\"page\":" + page + "}"
                 
                 val response = app.post(
                     url = "$mainUrl/wp-admin/admin-ajax.php",
@@ -1038,45 +1038,48 @@ open class AnimeDekhoProvider : MainAPI() {
 
         // ─── Download Buttons: GDFlix & HubCloud ───
         // <div class="buttondl"><a class="button45" href="...">GDFlix (1080p)</a></div>
-        val dlButtons = doc.select("div.buttondl a[href]")
         var dlFound = false
+        val dlButtons = doc.select("div.buttondl a[href]")
         for (btn in dlButtons) {
             val btnLabel = btn.text().trim()
-            val resolved = runCatching { resolveDlTarget(btn.attr("href")) }.getOrNull() ?: continue
+            val resolved = runCatching { resolveDlTarget(btn.attr("href")) }.getOrNull()
 
-            Log.d("AnimeDekho", "DL button [$btnLabel] → $resolved")
+            if (resolved.isNullOrEmpty()) continue
+
+            Log.d("AnimeDekho", "DL button [$btnLabel] resolved to $resolved")
 
             val lower = resolved.lowercase()
-            when {
-                lower.contains("gdflix") || lower.contains("gdlink") ||
-                lower.contains("hubcloud") || lower.contains("vcloud") -> {
-                    runCatching {
-                        loadExtractor(resolved, mainUrl, subtitleCallback, callback)
-                        dlFound = true
-                    }
+            if (lower.contains("gdflix") || lower.contains("gdlink") ||
+                lower.contains("hubcloud") || lower.contains("vcloud")) {
+                try {
+                    loadExtractor(resolved, mainUrl, subtitleCallback, callback)
+                    dlFound = true
+                } catch (e: Exception) {
+                    Log.e("AnimeDekho", "Failed to extract $resolved: ${e.message}")
                 }
-                lower.contains("pixeldra") -> {
-                    runCatching {
-                        val pdBase = java.net.URI(resolved).let { "${it.scheme}://${it.host}" }
-                        val finalPd = if (resolved.contains("download", ignoreCase = true)) resolved
-                                      else "$pdBase/api/file/${resolved.substringAfterLast("/")}?download"
-                        callback.invoke(
-                            newExtractorLink(
-                                "Pixeldrain",
-                                "Pixeldrain $btnLabel",
-                                finalPd,
-                                ExtractorLinkType.VIDEO
-                            ) {
-                                this.quality = Qualities.Unknown.value
-                            }
-                        )
-                        dlFound = true
-                    }
+            } else if (lower.contains("pixeldra")) {
+                try {
+                    val pdUri = java.net.URI(resolved)
+                    val pdBase = pdUri.scheme + "://" + pdUri.host
+                    val finalPd = if (resolved.contains("download", ignoreCase = true)) resolved
+                                  else pdBase + "/api/file/" + resolved.substringAfterLast("/") + "?download"
+                    callback.invoke(
+                        newExtractorLink(
+                            "Pixeldrain",
+                            "Pixeldrain $btnLabel",
+                            finalPd,
+                            ExtractorLinkType.VIDEO
+                        ) {
+                            this.quality = Qualities.Unknown.value
+                        }
+                    )
+                    dlFound = true
+                } catch (e: Exception) {
+                    // Ignore
                 }
-                else -> {
-                    // Unknown host — let CloudStream route it if an extractor matches
-                    runCatching { loadExtractor(resolved, mainUrl, subtitleCallback, callback) }
-                }
+            } else {
+                // Unknown host — let CloudStream route it if an extractor matches
+                runCatching { loadExtractor(resolved, mainUrl, subtitleCallback, callback) }
             }
         }
 
